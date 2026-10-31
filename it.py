@@ -175,7 +175,7 @@ def main():
                 if state == VISIBLE and dx == 0 and ghost is None:
                     out = frame
                 else:
-                    base = fx.remove_person(frame, plate.u8(), removal)
+                    base = fx.remove_person(frame, plate.matched(frame, learn_ok, removal), removal)
                     layer, alpha = fx.shift(frame, soft, dx)
 
                     if state == VANISHING:

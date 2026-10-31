@@ -155,6 +155,12 @@ class CleanPlate:
         self.capturing = False
         self._cap_start = 0.0
         self._frames = []
+        self._gain = None
+        self._sigma = 0.0
+        self._noise = None
+        self._rng = np.random.default_rng()
+        self._p_small = None
+        self._calls = 0
 
     # ---- explicit capture -------------------------------------------------
     def start_capture(self, now):
@@ -172,6 +178,7 @@ class CleanPlate:
             return "CAPTURING BACKGROUND..."
         self.img = np.median(np.stack(self._frames), axis=0).astype(np.float32)
         self.known = np.full((self.h, self.w), 255, np.uint8)
+        self._p_small = None
         self._frames = []
         self.capturing = False
         return None
@@ -202,6 +209,76 @@ class CleanPlate:
 
     def u8(self):
         return cv2.convertScaleAbs(self.img)
+
+    def matched(self, frame, learn_ok, removal):
+        """Plate adjusted to look like the *live* camera right now.
+
+        Webcams constantly change exposure / white balance and add sensor
+        grain. A frozen plate therefore shows up as a slightly-off silhouette
+        where you were. Fix:
+          1. Local gain map (per channel) from live vs plate in the visible
+             background, interpolated across the area you cover.
+          2. Fresh grain matching the camera's measured noise level.
+        """
+        gw, gh = 64, 36
+        f = cv2.resize(frame, (gw, gh), interpolation=cv2.INTER_AREA).astype(np.float32)
+        # plate changes slowly: refresh its low-res copy every 10 calls
+        self._calls += 1
+        if self._p_small is None or self._calls % 10 == 0:
+            self._p_small = cv2.resize(self.img, (gw, gh), interpolation=cv2.INTER_AREA)
+        p = self._p_small
+        m = (cv2.resize(learn_ok, (gw, gh), interpolation=cv2.INTER_AREA) > 250).astype(np.float32)
+
+        if m.sum() >= 20:
+            m3 = m[..., None]
+            g_global = ((f * m3).sum((0, 1)) + 1) / ((p * m3).sum((0, 1)) + 1)
+            blur = lambda x: cv2.GaussianBlur(x, (0, 0), 6)
+            den = blur(m)[..., None]
+            local = (blur(f * m3) + 1) / (blur(p * m3) + 1)
+            w = den / (den + 0.05)  # trust local estimate where background is visible nearby
+            gain = w * local + (1 - w) * g_global
+            gain = np.clip(gain, 0.5, 2.0).astype(np.float32)
+            self._gain = gain if self._gain is None else 0.6 * gain + 0.4 * self._gain
+        gain = self._gain if self._gain is not None else np.ones((gh, gw, 3), np.float32)
+
+        # Camera grain: robust noise estimate (MAD) on sampled background pixels.
+        sel = learn_ok[::8, ::8] > 0
+        if sel.sum() > 200:
+            ps = self.img[::8, ::8]
+            gs = cv2.resize(gain, (ps.shape[1], ps.shape[0]), interpolation=cv2.INTER_LINEAR)
+            diff = (frame[::8, ::8].astype(np.float32) - ps * gs)[sel]
+            diff -= np.median(diff, axis=0)
+            sigma = float(np.median(np.abs(diff)) * 1.4826)
+            self._sigma = 0.8 * self._sigma + 0.2 * min(sigma, 8.0)
+        if self._noise is None:  # pool of unit-variance grain frames, generated once
+            self._noise = []
+            for _ in range(6):
+                n = np.empty((self.h, self.w, 3), np.float32)
+                cv2.randn(n, (0.0, 0.0, 0.0), (1.0, 1.0, 1.0))
+                self._noise.append(n)
+
+        # Only the area being erased needs the plate; do the full-res work there.
+        out = frame.copy()
+        x, y, bw, bh = cv2.boundingRect((removal > 0.002).astype(np.uint8))
+        if bw == 0 or bh == 0:
+            return out
+        g = cv2.resize(gain, (self.w, self.h), interpolation=cv2.INTER_LINEAR)[y:y + bh, x:x + bw]             if bw * bh > 0.6 * self.w * self.h else self._crop_gain(gain, x, y, bw, bh)
+        roi = cv2.multiply(self.img[y:y + bh, x:x + bw], g)
+        if self._sigma > 0.5:
+            n = self._noise[self._rng.integers(len(self._noise))]
+            roi = cv2.scaleAdd(n[y:y + bh, x:x + bw], self._sigma, roi)
+        out[y:y + bh, x:x + bw] = cv2.convertScaleAbs(roi)
+        return out
+
+    def _crop_gain(self, gain, x, y, bw, bh):
+        """Upsample only the needed part of the low-res gain map (same result as full resize + crop)."""
+        gh, gw = gain.shape[:2]
+        sx, sy = gw / self.w, gh / self.h
+        mx = (np.arange(x, x + bw, dtype=np.float32) + 0.5) * sx - 0.5
+        my = (np.arange(y, y + bh, dtype=np.float32) + 0.5) * sy - 0.5
+        map_x = np.broadcast_to(mx[None, :], (bh, bw)).astype(np.float32)
+        map_y = np.broadcast_to(my[:, None], (bh, bw)).astype(np.float32)
+        return cv2.remap(gain, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
 
     @property
     def coverage(self):

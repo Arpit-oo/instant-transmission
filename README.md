@@ -32,6 +32,7 @@ Flags: `--camera 1`, `--hold 0.5`, `--teleport`, `--ghost` (fading afterimage), 
 - **Gesture**: MediaPipe Hands + Face Mesh. Index + middle extended and together, ring + pinky curled, fingertips on the forehead line, held 0.3s.
 - **Vanish**: MediaPipe Selfie Segmentation erases you and fills the hole from a clean background plate. The erase mask is the union of recent frames, pushed forward along your motion (segmentation lags real movement), dilated and feathered outward, so no edges or fragments leak through when you move.
 - **Background plate**: captured at start, then refreshed only in regions far from you, so it tracks lighting without absorbing pieces of you.
+- **Invisible, not a silhouette**: every frame the plate is re-matched to the live camera: a local per-channel gain map (webcam auto-exposure / white balance drift) plus fresh sensor grain at the camera's measured noise level. Without this, the erased area reads as a slightly-off, too-clean outline.
 - **Output**: `pyvirtualcam` → OBS Virtual Camera.
 
 Tips: steady lighting, keep the camera still (the background plate assumes it), press B if lighting changes.
