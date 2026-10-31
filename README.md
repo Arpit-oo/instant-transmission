@@ -10,12 +10,12 @@ Put two fingers (index + middle) on your forehead, hold ~0.3s → you vanish fro
 In Zoom / Meet / Teams, choose **OBS Virtual Camera** as the camera.
 
 ## Usage
-On start: step out of frame for the 3s countdown so it can capture the empty room (or `--no-capture`; it learns the background as you move).
+On start: **step fully out of frame**. It waits until it sees an empty room, then captures it. Can't leave your seat? Press SPACE to skip: it learns the room as you move and fills unseen spots from their surroundings (never from frames with you in them).
 
 | Key | Action |
 |---|---|
-| SPACE | vanish / reappear manually |
-| B | recapture background |
+| SPACE | vanish / reappear manually (skips background capture while capturing) |
+| B | recapture background (waits for empty room) |
 | T | teleport mode (reappear elsewhere in frame) |
 | M | sound on/off |
 | D | debug overlay (gesture checks) |
@@ -31,7 +31,7 @@ Flags: `--camera 1`, `--hold 0.5`, `--teleport`, `--ghost` (fading afterimage), 
 ## How it works
 - **Gesture**: MediaPipe Hands + Face Mesh. Index + middle extended and together, ring + pinky curled, fingertips on the forehead line, held 0.3s.
 - **Vanish**: MediaPipe Selfie Segmentation erases you and fills the hole from a clean background plate. The erase mask is the union of recent frames, pushed forward along your motion (segmentation lags real movement), dilated and feathered outward, so no edges or fragments leak through when you move.
-- **Background plate**: captured at start, then refreshed only in regions far from you, so it tracks lighting without absorbing pieces of you.
+- **Background plate**: captured only once the room is verifiably empty. Afterwards, pixels are refreshed only when far from you **and** already matching the plate, so a person can never be absorbed into it.
 - **Invisible, not a silhouette**: every frame the plate is re-matched to the live camera: a local per-channel gain map (webcam auto-exposure / white balance drift) plus fresh sensor grain at the camera's measured noise level. Without this, the erased area reads as a slightly-off, too-clean outline.
 - **Output**: `pyvirtualcam` → OBS Virtual Camera.
 

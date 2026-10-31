@@ -76,6 +76,7 @@ class Segmenter:
         self._hist = []
         self._centroid = None
         self._v = (0.0, 0.0)
+        self.person_frac = 0.0
         self._k_erase = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
         self._k_safe = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (61, 61))
 
@@ -108,6 +109,7 @@ class Segmenter:
 
         # Erase mask: anything remotely person-like, over the last few frames.
         core = (raw > 0.08).astype(np.uint8)
+        self.person_frac = float(cv2.countNonZero(core)) / core.size
         self._hist.append(core)
         self._hist = self._hist[-self.HISTORY:]
         union = self._hist[0].copy()
@@ -137,23 +139,31 @@ class Segmenter:
 
 
 class CleanPlate:
-    """Background model of the room without you in it.
+    """Background model of the room WITHOUT you in it. It must never contain you.
 
-    - Optional explicit capture (step out of frame, median of N frames).
-    - Continuously refreshed wherever you are NOT, so it tracks lighting
-      changes and fills in as you move around.
-    - Never-seen pixels are inpainted when needed.
+    - Explicit capture waits until the segmenter sees an empty room, then takes
+      a median of N frames. (A blind countdown baked people into the plate.)
+    - If capture is skipped, pixels are only ever taken from frames where the
+      segmenter says no person is anywhere near them. Unseen pixels are
+      inpainted from their surroundings.
+    - Ongoing refresh only touches pixels that already match the plate, so a
+      person (or anything new) can never be absorbed. Exposure drift is
+      handled separately by matched().
     """
 
-    def __init__(self, size, countdown_s=3.0, capture_frames=15, learn_rate=0.03):
+    EMPTY_FRAC = 0.003  # person pixels (fraction of frame) still counted as "empty room"
+    EMPTY_HOLD_S = 1.0  # room must stay empty this long before capturing
+
+    def __init__(self, size, capture_frames=15, learn_rate=0.1, learn_every=4, match_tol=20):
         self.w, self.h = size
-        self.countdown_s = countdown_s
         self.capture_frames = capture_frames
         self.learn_rate = learn_rate
+        self.learn_every = learn_every
+        self.match_tol = match_tol
         self.img = None  # float32 BGR
         self.known = None  # uint8 0/255
         self.capturing = False
-        self._cap_start = 0.0
+        self._empty_since = None
         self._frames = []
         self._gain = None
         self._sigma = 0.0
@@ -161,18 +171,28 @@ class CleanPlate:
         self._rng = np.random.default_rng()
         self._p_small = None
         self._calls = 0
+        self._updates = 0
 
     # ---- explicit capture -------------------------------------------------
     def start_capture(self, now):
         self.capturing = True
-        self._cap_start = now
+        self._empty_since = None
         self._frames = []
 
-    def tick_capture(self, frame, now):
+    def skip_capture(self):
+        self.capturing = False
+        self._frames = []
+
+    def tick_capture(self, frame, now, person_frac):
         """Returns a status string while capturing, None when done."""
-        left = self.countdown_s - (now - self._cap_start)
-        if left > 0:
-            return f"STEP OUT OF FRAME  {int(left) + 1}"
+        if person_frac > self.EMPTY_FRAC:
+            self._empty_since = None
+            self._frames = []
+            return "STEP OUT OF FRAME  (SPACE to skip)"
+        if self._empty_since is None:
+            self._empty_since = now
+        if now - self._empty_since < self.EMPTY_HOLD_S:
+            return "ROOM EMPTY - HOLD STILL..."
         self._frames.append(frame)
         if len(self._frames) < self.capture_frames:
             return "CAPTURING BACKGROUND..."
@@ -186,13 +206,23 @@ class CleanPlate:
     # ---- continuous learning ----------------------------------------------
     def update(self, frame, learn_ok):
         """learn_ok: uint8 mask, 255 where no person is anywhere near."""
-        bg = learn_ok
         if self.img is None:
-            self.img = frame.astype(np.float32)
-            self.known = bg.copy()
-            return
-        cv2.accumulateWeighted(frame, self.img, self.learn_rate, mask=bg)
-        cv2.bitwise_or(self.known, bg, dst=self.known)
+            self.img = np.zeros((self.h, self.w, 3), np.float32)
+            self.known = np.zeros((self.h, self.w), np.uint8)
+        self._updates += 1
+
+        # 1. First sighting of a pixel with nobody near it: take it as-is.
+        new = cv2.bitwise_and(learn_ok, cv2.bitwise_not(self.known))
+        if cv2.countNonZero(new):
+            self.img[new > 0] = frame[new > 0]
+            cv2.bitwise_or(self.known, new, dst=self.known)
+            self._p_small = None
+
+        # 2. Gentle refresh, only where the live pixel already matches the plate.
+        if self._updates % self.learn_every == 0:
+            close = cv2.absdiff(frame, cv2.convertScaleAbs(self.img)).max(axis=2) < self.match_tol
+            ok = cv2.bitwise_and(learn_ok, close.astype(np.uint8) * 255)
+            cv2.accumulateWeighted(frame, self.img, self.learn_rate, mask=ok)
 
     def fill_unknown(self):
         """Inpaint regions never seen without a person in front of them."""
@@ -206,6 +236,7 @@ class CleanPlate:
         filled = cv2.resize(filled, (self.w, self.h), interpolation=cv2.INTER_CUBIC).astype(np.float32)
         unknown = self.known == 0
         self.img[unknown] = filled[unknown]
+        self._p_small = None
 
     def u8(self):
         return cv2.convertScaleAbs(self.img)

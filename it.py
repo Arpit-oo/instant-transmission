@@ -162,7 +162,7 @@ def main():
             out = frame
 
             if plate.capturing:
-                status = plate.tick_capture(frame, now)
+                status = plate.tick_capture(frame, now, seg.person_frac)
             else:
                 plate.update(frame, learn_ok)
                 fired, progress = gest.update(rgb, now)
@@ -218,8 +218,11 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key in (ord("q"), 27) or cv2.getWindowProperty(win, cv2.WND_PROP_VISIBLE) < 1:
                 break
-            elif key == ord(" ") and not plate.capturing:
-                toggle(soft)
+            elif key == ord(" "):
+                if plate.capturing:
+                    plate.skip_capture()
+                else:
+                    toggle(soft)
             elif key == ord("b"):
                 plate.start_capture(now)
             elif key == ord("t"):
