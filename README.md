@@ -21,7 +21,7 @@ On start: **step fully out of frame**. It waits until it sees an empty room, the
 | D | debug overlay (gesture checks) |
 | Q / ESC | quit |
 
-Flags: `--camera 1`, `--hold 0.5`, `--teleport`, `--ghost` (fading afterimage), `--glow` (cyan rim glow), `--mute`, `--no-vcam`, `--mirror-output`, `--width/--height/--fps`.
+Flags: `--camera 1`, `--hold 0.5`, `--teleport`, `--no-ghost` (disable fading afterimage), `--no-glow` (disable cyan rim glow), `--mute`, `--no-vcam`, `--mirror-output`, `--width/--height/--fps`.
 
 ## Google Meet
 1. Start `run.bat` **before** joining (keep it running; Meet shows black if it closes).

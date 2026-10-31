@@ -36,8 +36,8 @@ def parse_args():
     p.add_argument("--ghost-time", type=float, default=0.6)
     p.add_argument("--no-vcam", action="store_true", help="preview only")
     p.add_argument("--no-capture", action="store_true", help="skip startup background capture")
-    p.add_argument("--ghost", action="store_true", help="fading afterimage after vanishing")
-    p.add_argument("--glow", action="store_true", help="cyan rim glow during transitions")
+    p.add_argument("--no-ghost", action="store_true", help="disable fading afterimage after vanishing")
+    p.add_argument("--no-glow", action="store_true", help="disable cyan rim glow during transitions")
     p.add_argument("--teleport", action="store_true", help="reappear somewhere else in frame")
     p.add_argument("--mirror-output", action="store_true", help="mirror the virtual cam feed")
     p.add_argument("--mute", action="store_true", help="no sound effects")
@@ -110,7 +110,7 @@ def main():
     plate = CleanPlate((w, h))
     sfx = Sfx(enabled=not args.mute)
     vcam = None if args.no_vcam else open_vcam(w, h, args.fps)
-    fx = FX((w, h), glow=args.glow)
+    fx = FX((w, h), glow=not args.no_glow)
     rng = np.random.default_rng()
 
     state, t_state = VISIBLE, time.time()
@@ -180,7 +180,7 @@ def main():
 
                     if state == VANISHING:
                         u = min(1.0, t / args.vanish_time)
-                        if ghost is None and args.ghost:
+                        if ghost is None and not args.no_ghost:
                             ghost = (fx.make_ghost(layer, alpha), now)
                         out = fx.transition(base, layer, alpha, u)
                         if u >= 1.0:
